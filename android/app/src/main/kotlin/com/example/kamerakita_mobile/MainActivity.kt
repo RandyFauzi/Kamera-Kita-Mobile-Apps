@@ -30,6 +30,7 @@ class MainActivity : FlutterActivity() {
     private lateinit var orientationManager: OrientationManager
     private lateinit var storage: PrivateCaptureStorage
     private lateinit var episodeManager: EpisodeManager
+    private lateinit var handAnalyzer: HandAnalyzer
     
     private var pendingStopResult: MethodChannel.Result? = null
     private var tempCsvFile: File? = null
@@ -43,7 +44,12 @@ class MainActivity : FlutterActivity() {
         )
         
         sensorRecorder = SensorRecorder(this)
-        cameraManager = CameraManager(this, this)
+        
+        handAnalyzer = HandAnalyzer(this) { count ->
+            // In future, stream hand count to flutter if needed
+        }
+        
+        cameraManager = CameraManager(this, this, handAnalyzer)
         
         orientationManager = OrientationManager(this) { state ->
             runOnUiThread {
@@ -68,7 +74,9 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "startCamera" -> {
                     if (allPermissionsGranted()) {
-                        val textureId = cameraManager.startCamera(flutterEngine.renderer)
+                        val textureId = cameraManager.startCamera(flutterEngine.renderer) {
+                            // Camera Ready
+                        }
                         result.success(textureId)
                     } else {
                         ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
@@ -87,31 +95,34 @@ class MainActivity : FlutterActivity() {
                     val tempVideo = storage.createTempVideoFile()
                     tempCsvFile = storage.createTempImuFile()
                     sensorRecorder.startRecording(tempCsvFile!!)
+                    handAnalyzer.startRecordingStats()
                     
                     cameraManager.startRecording(tempVideo) { videoFile, error ->
                         val imuMeta = sensorRecorder.stopRecording()
+                        val handScore = handAnalyzer.stopRecordingStats()
                         
                         if (error == null && videoFile != null && tempCsvFile != null) {
+                            // DYNAMIC METADATA
                             val camMeta = mapOf(
                                 "camera_id" to "0",
                                 "lens_facing" to "BACK",
-                                "sensor_orientation" to 90,
-                                "ois_available" to true
+                                "sensor_orientation" to cameraManager.actualSensorOrientation,
+                                "ois_available" to cameraManager.isOisSupported
                             )
                             val capMeta = mapOf(
                                 "orientation_required" to "LANDSCAPE",
-                                "orientation_integrity" to "PASSED",
-                                "resolution" to "1920x1080",
-                                "fps_requested" to 30,
-                                "fps_observed" to 30.0,
-                                "codec" to "HEVC"
+                                "orientation_integrity" to if (orientationManager.isLandscape()) "PASSED" else "FAILED_ORIENTATION_POLICY",
+                                "resolution" to cameraManager.actualResolution,
+                                "fps_requested" to cameraManager.actualFpsRequested,
+                                "fps_observed" to cameraManager.actualFpsRequested.toDouble(), // For now, assume locked
+                                "codec" to "HEVC",
+                                "hand_presence_percentage" to handScore
                             )
                             
                             try {
                                 val finalPayload = episodeManager.finalizeEpisode(
                                     videoFile, tempCsvFile!!, capMeta, camMeta, imuMeta
                                 )
-                                // Convert finalPayload to JSON String to easily pass to Flutter
                                 val jsonStr = JSONObject(finalPayload).toString()
                                 pendingStopResult?.success(mapOf("payload" to jsonStr))
                             } catch (e: Exception) {
@@ -139,6 +150,7 @@ class MainActivity : FlutterActivity() {
         super.onDestroy()
         orientationManager.stop()
         cameraManager.close()
+        handAnalyzer.close()
     }
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
