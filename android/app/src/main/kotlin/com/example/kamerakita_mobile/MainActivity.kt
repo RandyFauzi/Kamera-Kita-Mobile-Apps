@@ -117,14 +117,15 @@ class MainActivity : FlutterActivity() {
                                 "video_finalized_at_ns" to videoFinalizedAtNs,
                                 "imu_started_at_ns" to sensorRecorder.imuStartedAtNs,
                                 "imu_stopped_at_ns" to sensorRecorder.imuStoppedAtNs
-                            )
+                            ) as Map<String, Any>
 
                             val camMeta = mapOf(
                                 "camera_id" to "0",
                                 "lens_facing" to "BACK",
                                 "sensor_orientation" to cameraManager.actualSensorOrientation,
-                                "ois_available" to cameraManager.isOisSupported
-                            )
+                                "ois_available" to (cameraManager.isOisSupported ?: false)
+                            ) as Map<String, Any>
+                            
                             val capMeta = mapOf(
                                 "orientation_required" to "LANDSCAPE",
                                 "orientation_integrity" to if (orientationManager.isLandscape()) "PASSED" else "FAILED_ORIENTATION_POLICY",
@@ -133,7 +134,7 @@ class MainActivity : FlutterActivity() {
                                 "fps_observed" to cameraManager.actualFpsRequested.toDouble(), 
                                 "codec" to "HEVC",
                                 "hand_presence_percentage" to handScore
-                            )
+                            ) as Map<String, Any>
                             
                             // Phase 15: Run Heavy IO off Main Thread using Coroutines
                             kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
