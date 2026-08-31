@@ -16,6 +16,7 @@ class EpisodeManager(
     fun finalizeEpisode(
         videoFile: File, 
         imuFile: File, 
+        sessionTiming: Map<String, Any>,
         captureMetadata: Map<String, Any>,
         cameraMetadata: Map<String, Any>,
         imuMetadata: Map<String, Any>
@@ -24,53 +25,46 @@ class EpisodeManager(
         val videoHash = hashManager.computeSHA256(videoFile)
         val imuHash = hashManager.computeSHA256(imuFile)
         
-        val keyInfo = keystoreManager.generateKey()
+        val keyInfo = keystoreManager.getOrCreateKeyInfo()
         
-        // Construct canonical manifest structure
-        val manifest = mapOf(
+        val baseManifest = mutableMapOf<String, Any>(
             "schema_version" to "3.2",
             "episode" to mapOf(
                 "episode_id" to episodeId,
-                "session_id" to UUID.randomUUID().toString()
-            ),
+                "session_id" to sessionTiming["session_id"]
+            ) + sessionTiming,
             "capture" to captureMetadata,
             "camera" to cameraMetadata,
             "imu" to imuMetadata,
             "device_trust" to mapOf(
                 "hardware_backed" to keyInfo["hardware_backed"],
+                "security_level" to keyInfo["security_level"],
                 "strongbox" to keyInfo["strongbox"],
-                "play_integrity_status" to "NOT_CONFIGURED" // Stub for Phase 1
+                "play_integrity_status" to "NOT_CONFIGURED"
             ),
-            "storage" to mapOf("encrypted" to true)
+            "storage" to mapOf("encrypted" to false) // Phase 1 assumes raw until Phase 14
         )
         
-        // Hash and sign manifest
-        // In real app, we use Gson/Moshi. We mock the string payload here.
-        val manifestString = manifest.toString()
-        val signatureBytes = keystoreManager.signData(manifestString.toByteArray())
-        val signatureHex = signatureBytes.joinToString("") { "%02x".format(it) }
-        
-        val finalPayload = manifest.toMutableMap()
-        finalPayload["integrity"] = mapOf(
+        // 1. Construct canonical manifest without signature block
+        val integrityBlock = mutableMapOf<String, Any>(
             "video_sha256" to videoHash,
             "imu_sha256" to imuHash,
-            "signature_algorithm" to keyInfo["algorithm"],
-            "signature" to signatureHex
+            "signature_algorithm" to keyInfo["algorithm"] as String
         )
+        baseManifest["integrity"] = integrityBlock
+
+        // 2. Hash exact canonical bytes
+        val canonicalBytes = CanonicalManifestSerializer.serialize(baseManifest).toByteArray(Charsets.UTF_8)
+        val manifestHash = hashManager.computeStringSHA256(String(canonicalBytes))
         
-        // Encrypt files
-        val encVideo = File(storage.getEncryptedOutputDir(), "$episodeId.video.enc")
-        val encImu = File(storage.getEncryptedOutputDir(), "$episodeId.imu.enc")
+        // 3. Sign the canonical payload
+        val signatureBytes = keystoreManager.signData(canonicalBytes)
+        val signatureHex = signatureBytes.joinToString("") { "%02x".format(it) }
         
-        encryptionManager.encryptFile(videoFile, encVideo)
-        encryptionManager.encryptFile(imuFile, encImu)
+        // 4. Append to final manifest representation
+        integrityBlock["manifest_sha256"] = manifestHash
+        integrityBlock["signature"] = signatureHex
         
-        // Cleanup plaintext
-        storage.cleanupTempFiles(videoFile, imuFile)
-        
-        finalPayload["encrypted_video_path"] = encVideo.absolutePath
-        finalPayload["encrypted_imu_path"] = encImu.absolutePath
-        
-        return finalPayload
+        return baseManifest
     }
 }

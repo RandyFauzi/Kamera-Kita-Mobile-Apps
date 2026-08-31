@@ -2,69 +2,85 @@ package com.example.kamerakita_mobile.security
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.util.Log
+import android.security.keystore.KeyInfo
 import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.PrivateKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
+import java.security.KeyFactory
 
 class KeystoreManager {
-    private val keyAlias = "KameraKitaCaptureKey"
-    private val keystore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    private val KEY_ALIAS = "kamerakita_egocentric_key"
+    private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
-    fun generateKey(): Map<String, Any> {
-        val kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-        
-        var securityLevel = "LOW_TRUST"
-        var isStrongBox = false
-        var hardwareBacked = false
-
-        try {
-            // Attempt StrongBox
-            val builder = KeyGenParameterSpec.Builder(
-                keyAlias,
-                KeyProperties.PURPOSE_SIGN
-            ).setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-             .setDigests(KeyProperties.DIGEST_SHA256)
-             .setIsStrongBoxBacked(true)
+    fun getOrCreateKeyInfo(): Map<String, Any> {
+        if (!keyStore.containsAlias(KEY_ALIAS)) {
+            val keyPairGenerator = KeyPairGenerator.getInstance(
+                KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore"
+            )
             
-            kpg.initialize(builder.build())
-            kpg.generateKeyPair()
-            securityLevel = "STRONGBOX"
-            isStrongBox = true
-            hardwareBacked = true
-        } catch (e: Exception) {
-            Log.w("KeystoreManager", "StrongBox not available, falling back to TEE")
-            try {
-                val builder = KeyGenParameterSpec.Builder(
-                    keyAlias,
-                    KeyProperties.PURPOSE_SIGN
-                ).setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-                 .setDigests(KeyProperties.DIGEST_SHA256)
+            val builder = KeyGenParameterSpec.Builder(
+                KEY_ALIAS,
+                KeyProperties.PURPOSE_SIGN
+            )
+                .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
                 
-                kpg.initialize(builder.build())
-                kpg.generateKeyPair()
-                securityLevel = "TRUSTED_ENVIRONMENT"
-                hardwareBacked = true // Assuming TEE is hardware backed on modern Android
-            } catch (e2: Exception) {
-                Log.e("KeystoreManager", "TEE fallback failed", e2)
+            // Try StrongBox first, if it fails, fallback
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    builder.setIsStrongBoxBacked(true)
+                }
+                keyPairGenerator.initialize(builder.build())
+                keyPairGenerator.generateKeyPair()
+            } catch (e: Exception) {
+                // Fallback to TEE/Software
+                val fallbackBuilder = KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    KeyProperties.PURPOSE_SIGN
+                )
+                    .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+                    .setDigests(KeyProperties.DIGEST_SHA256)
+                keyPairGenerator.initialize(fallbackBuilder.build())
+                keyPairGenerator.generateKeyPair()
             }
+        }
+
+        // Verify hardware backing level
+        val privateKey = keyStore.getKey(KEY_ALIAS, null) as PrivateKey
+        val keyFactory = KeyFactory.getInstance(privateKey.algorithm, "AndroidKeyStore")
+        val keyInfo = keyFactory.getKeySpec(privateKey, KeyInfo::class.java)
+
+        var securityLevel = "UNKNOWN"
+        var isHardware = false
+        var isStrongBox = false
+
+        if (keyInfo.isInsideSecureHardware) {
+            isHardware = true
+            securityLevel = "TRUSTED_ENVIRONMENT"
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P && keyInfo.isInsideSecureHardware) {
+                // Heuristic: If we requested StrongBox earlier, it might be StrongBox. 
+                // But Android P+ KeyInfo lacks direct isStrongBoxBacked getter in older versions, checking OS version.
+                // For V3.2, assume TRUSTED_ENVIRONMENT unless we can explicitly query.
+                // We leave it as TRUSTED_ENVIRONMENT for safety.
+            }
+        } else {
+            securityLevel = "SOFTWARE"
         }
 
         return mapOf(
             "algorithm" to "ES256",
+            "hardware_backed" to isHardware,
             "security_level" to securityLevel,
-            "hardware_backed" to hardwareBacked,
-            "strongbox" to isStrongBox
+            "strongbox" to isStrongBox // Simplified for Phase 1
         )
     }
 
     fun signData(data: ByteArray): ByteArray {
-        val entry = keystore.getEntry(keyAlias, null) as? KeyStore.PrivateKeyEntry
-            ?: throw IllegalStateException("Key not found. Call generateKey first.")
-        
+        val privateKey = keyStore.getKey(KEY_ALIAS, null) as PrivateKey
         val signature = Signature.getInstance("SHA256withECDSA")
-        signature.initSign(entry.privateKey)
+        signature.initSign(privateKey)
         signature.update(data)
         return signature.sign()
     }

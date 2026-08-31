@@ -19,6 +19,9 @@ import com.example.kamerakita_mobile.sensors.SensorRecorder
 import com.example.kamerakita_mobile.storage.PrivateCaptureStorage
 import java.io.File
 import org.json.JSONObject
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 
 class MainActivity : FlutterActivity() {
     private val METHOD_CHANNEL = "kamerakita.ai/camera_sensor"
@@ -97,12 +100,25 @@ class MainActivity : FlutterActivity() {
                     sensorRecorder.startRecording(tempCsvFile!!)
                     handAnalyzer.startRecordingStats()
                     
+                    
+                    val sessionStartedAtNs = android.os.SystemClock.elapsedRealtimeNanos()
+                    val sessionId = java.util.UUID.randomUUID().toString()
+
                     cameraManager.startRecording(tempVideo) { videoFile, error ->
+                        val videoFinalizedAtNs = android.os.SystemClock.elapsedRealtimeNanos()
                         val imuMeta = sensorRecorder.stopRecording()
                         val handScore = handAnalyzer.stopRecordingStats()
                         
                         if (error == null && videoFile != null && tempCsvFile != null) {
-                            // DYNAMIC METADATA
+                            
+                            val sessionTiming = mapOf(
+                                "session_id" to sessionId,
+                                "session_started_at_ns" to sessionStartedAtNs,
+                                "video_finalized_at_ns" to videoFinalizedAtNs,
+                                "imu_started_at_ns" to sensorRecorder.imuStartedAtNs,
+                                "imu_stopped_at_ns" to sensorRecorder.imuStoppedAtNs
+                            )
+
                             val camMeta = mapOf(
                                 "camera_id" to "0",
                                 "lens_facing" to "BACK",
@@ -114,24 +130,33 @@ class MainActivity : FlutterActivity() {
                                 "orientation_integrity" to if (orientationManager.isLandscape()) "PASSED" else "FAILED_ORIENTATION_POLICY",
                                 "resolution" to cameraManager.actualResolution,
                                 "fps_requested" to cameraManager.actualFpsRequested,
-                                "fps_observed" to cameraManager.actualFpsRequested.toDouble(), // For now, assume locked
+                                "fps_observed" to cameraManager.actualFpsRequested.toDouble(), 
                                 "codec" to "HEVC",
                                 "hand_presence_percentage" to handScore
                             )
                             
-                            try {
-                                val finalPayload = episodeManager.finalizeEpisode(
-                                    videoFile, tempCsvFile!!, capMeta, camMeta, imuMeta
-                                )
-                                val jsonStr = JSONObject(finalPayload).toString()
-                                pendingStopResult?.success(mapOf("payload" to jsonStr))
-                            } catch (e: Exception) {
-                                pendingStopResult?.error("FINALIZE_ERROR", e.message, null)
+                            // Phase 15: Run Heavy IO off Main Thread using Coroutines
+                            kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                try {
+                                    val finalPayload = episodeManager.finalizeEpisode(
+                                        videoFile, tempCsvFile!!, sessionTiming, capMeta, camMeta, imuMeta
+                                    )
+                                    val jsonStr = org.json.JSONObject(finalPayload).toString()
+                                    runOnUiThread {
+                                        pendingStopResult?.success(mapOf("payload" to jsonStr))
+                                        pendingStopResult = null
+                                    }
+                                } catch (e: Exception) {
+                                    runOnUiThread {
+                                        pendingStopResult?.error("FINALIZE_ERROR", e.message, null)
+                                        pendingStopResult = null
+                                    }
+                                }
                             }
                         } else {
                             pendingStopResult?.error("RECORDING_ERROR", error?.message ?: "Unknown", null)
+                            pendingStopResult = null
                         }
-                        pendingStopResult = null
                     }
                     result.success("Recording Started")
                 }
