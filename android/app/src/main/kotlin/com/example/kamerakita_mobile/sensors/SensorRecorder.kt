@@ -62,7 +62,7 @@ class SensorRecorder(context: Context) : SensorEventListener {
 
         if (sampleCount > 1 && timestamps.isNotEmpty()) {
             val durationNs = lastTimestampNs - firstTimestampNs
-            actualMeanRateHz = sampleCount.toDouble() / (durationNs / 1_000_000_000.0)
+            actualMeanRateHz = (sampleCount - 1).toDouble() / (durationNs / 1_000_000_000.0)
             
             val intervals = mutableListOf<Long>()
             for (i in 1 until timestamps.size) {

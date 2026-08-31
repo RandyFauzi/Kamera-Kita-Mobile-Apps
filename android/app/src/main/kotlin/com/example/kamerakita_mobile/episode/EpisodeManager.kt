@@ -16,18 +16,18 @@ class EpisodeManager(
     fun finalizeEpisode(
         videoFile: File, 
         imuFile: File, 
-        sessionTiming: Map<String, Any>,
-        captureMetadata: Map<String, Any>,
-        cameraMetadata: Map<String, Any>,
-        imuMetadata: Map<String, Any>
-    ): Map<String, Any> {
+        sessionTiming: Map<String, Any?>,
+        captureMetadata: Map<String, Any?>,
+        cameraMetadata: Map<String, Any?>,
+        imuMetadata: Map<String, Any?>
+    ): Map<String, Any?> {
         val episodeId = UUID.randomUUID().toString()
         val videoHash = hashManager.computeSHA256(videoFile)
         val imuHash = hashManager.computeSHA256(imuFile)
         
         val keyInfo = keystoreManager.getOrCreateKeyInfo()
         
-        val baseManifest = mutableMapOf<String, Any>(
+        val baseManifest = mutableMapOf<String, Any?>(
             "schema_version" to "3.2",
             "episode" to mapOf(
                 "episode_id" to episodeId,
@@ -46,7 +46,7 @@ class EpisodeManager(
         )
         
         // 1. Construct canonical manifest without signature block
-        val integrityBlock = mutableMapOf<String, Any>(
+        val integrityBlock = mutableMapOf<String, Any?>(
             "video_sha256" to videoHash,
             "imu_sha256" to imuHash,
             "signature_algorithm" to keyInfo["algorithm"] as String

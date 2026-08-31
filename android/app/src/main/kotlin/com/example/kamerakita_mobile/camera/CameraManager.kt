@@ -35,7 +35,7 @@ class CameraManager(
     var actualSensorOrientation: Int = 0
     var actualResolution: String = "Unknown"
     var actualFpsRequested: Int = 30
-    var isOisSupported: Boolean? = null
+    var isOisSupported: Boolean? = null\n    var actualIntrinsicsMap: MutableMap<String, Any?> = mutableMapOf()
 
     @SuppressLint("UnsafeOptInUsageError")
     fun startCamera(textureRegistry: TextureRegistry, onCameraReady: () -> Unit): Long {
@@ -104,6 +104,22 @@ class CameraManager(
                 
                 val availableOis = camera2Info.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
                 isOisSupported = availableOis?.contains(CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON) ?: false
+                
+                // Priority 3: Intrinsics
+                val focalLengths = camera2Info.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                val activeArray = camera2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                val physicalSize = camera2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                val intrinsicsCalib = camera2Info.getCameraCharacteristic(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
+                
+                actualIntrinsicsMap = mutableMapOf<String, Any?>()
+                actualIntrinsicsMap["focal_length_mm"] = focalLengths?.firstOrNull()
+                actualIntrinsicsMap["active_array_width"] = activeArray?.width()
+                actualIntrinsicsMap["active_array_height"] = activeArray?.height()
+                actualIntrinsicsMap["physical_size_width_mm"] = physicalSize?.width
+                actualIntrinsicsMap["physical_size_height_mm"] = physicalSize?.height
+                actualIntrinsicsMap["intrinsics"] = intrinsicsCalib?.toList()
+                actualIntrinsicsMap["intrinsics_status"] = if (intrinsicsCalib != null) "AVAILABLE" else "UNAVAILABLE"
+
 
                 onCameraReady()
             } catch (exc: Exception) {
@@ -115,7 +131,7 @@ class CameraManager(
         return textureEntry!!.id()
     }
 
-    fun startRecording(outputFile: File, onComplete: (File?, Throwable?) -> Unit) {
+    fun startRecording(outputFile: File, onComplete: (File?, RecordingStats?, Throwable?) -> Unit) {
         val videoCapture = this.videoCapture ?: return
         val recordingOptions = FileOutputOptions.Builder(outputFile).build()
 
@@ -124,9 +140,9 @@ class CameraManager(
             .start(ContextCompat.getMainExecutor(context)) { recordEvent ->
                 if (recordEvent is VideoRecordEvent.Finalize) {
                     if (!recordEvent.hasError()) {
-                        onComplete(outputFile, null)
+                        onComplete(outputFile, recordEvent.recordingStats, null)
                     } else {
-                        onComplete(null, recordEvent.cause)
+                        onComplete(null, recordEvent.recordingStats, recordEvent.cause)
                     }
                 }
             }
