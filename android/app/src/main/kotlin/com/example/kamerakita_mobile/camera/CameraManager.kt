@@ -35,7 +35,8 @@ class CameraManager(
     var actualSensorOrientation: Int = 0
     var actualResolution: String = "Unknown"
     var actualFpsRequested: Int = 30
-    var isOisSupported: Boolean? = null\n    var actualIntrinsicsMap: MutableMap<String, Any?> = mutableMapOf()
+    var isOisSupported: Boolean? = null
+    var actualIntrinsicsMap: MutableMap<String, Any?> = mutableMapOf()
 
     @SuppressLint("UnsafeOptInUsageError")
     fun startCamera(textureRegistry: TextureRegistry, onCameraReady: () -> Unit): Long {
